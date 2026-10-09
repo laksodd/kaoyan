@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>考研英语 · 笔记复习</title>
+<script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" href="icon-192.png">
@@ -1371,7 +1372,16 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
       '<div class="bd">学习记录（收藏、掌握、错题本、FSRS 排期、打卡）保存在本浏览器里，换浏览器或清缓存前先导出备份（当前约 ' + Math.round(n / 1024) + ' KB）。</div>' +
       '<div class="tools2"><button class="tbtn ok" id="bkDown">⬇ 导出备份 JSON</button>' +
       '<label class="tbtn" style="cursor:pointer">⬆ 导入备份<input type="file" id="bkFile" accept=".json" style="display:none"></label>' +
-      '<button class="tbtn bad" id="bkReset">清空全部记录</button></div></div>';
+      '<button class="tbtn bad" id="bkReset">清空全部记录</button></div></div>' +
+      '<div class="card"><div class="chead"><span class="k w">跨设备同步</span></div>' +
+      '<div class="bd">手机 ↔ 电脑搬进度：<b>①</b> 在学过的那台设备点「生成同步码」并复制；' +
+      '<b>②</b> 在另一台设备粘贴到下面的框里点「导入」。<br>' +
+      '<span style="font-size:12px;color:var(--dim)">（同步码 = 打包压缩的进度，可发微信/短信，无服务器不经过第三方）</span></div>' +
+      '<div class="tools2"><button class="tbtn" id="bkSyncGen">🔑 生成同步码</button></div>' +
+      '<textarea id="bkSyncBox" style="width:100%;min-height:70px;font:12px/1.5 monospace;padding:8px;border:1px solid var(--line);border-radius:8px;resize:vertical;box-sizing:border-box" placeholder="生成后这里会出现同步码；或把另一台设备的同步码粘贴到这里"></textarea>' +
+      '<div class="tools2"><button class="tbtn ok" id="bkSyncImport">⬆ 导入同步码（覆盖本机进度）</button>' +
+      '<button class="tbtn" id="bkSyncCopy">复制</button></div>' +
+      '<div id="bkSyncMsg" style="font-size:12px;margin-top:4px"></div></div>';
     document.getElementById("bkDown").onclick = function () {
       var out = { app: "kaoyan-english-notes", v: 1, date: new Date().toISOString(), data: {} };
       try { localStorage.setItem("kbackup", String(Date.now())); } catch (e) {}
@@ -1402,6 +1412,74 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
     document.getElementById("bkReset").onclick = function () {
       if (!confirm("确定清空全部学习记录（收藏/掌握/错题/打卡）？此操作不可恢复，建议先导出备份。")) return;
       BK_KEYS.forEach(function (k) { localStorage.removeItem(k); });
+      location.reload();
+    };
+
+    /* ---- 跨设备同步码：进度打包压缩成一段文本，手机↔电脑互相导入 ---- */
+    function syncMsg(t, cls) {
+      var n = document.getElementById("bkSyncMsg");
+      n.textContent = t;
+      n.className = cls || "";
+    }
+    function toSyncCode() {
+      var data = {};
+      BK_KEYS.forEach(function (k) {
+        var v = localStorage.getItem(k);
+        if (v) data[k] = v;                    // 保留原始 JSON 字符串，不二次解析
+      });
+      var raw = JSON.stringify({ app: "kaoyan-english-notes", v: 1, date: new Date().toISOString(), data: data });
+      try {
+        if (window.pako) {
+          var deflated = window.pako.deflate(raw);
+          var bin = "";
+          for (var i = 0; i < deflated.length; i++) bin += String.fromCharCode(deflated[i]);
+          return "KZ1." + btoa(bin);
+        }
+      } catch (e) { /* pako 加载失败走兜底 */ }
+      return "KZ0." + btoa(unescape(encodeURIComponent(raw)));
+    }
+    function fromSyncCode(code) {
+      code = (code || "").trim();
+      if (code.indexOf("KZ1.") === 0 && window.pako) {
+        var bin = atob(code.slice(4));
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return JSON.parse(window.pako.inflate(bytes, { to: "string" }));
+      }
+      if (code.indexOf("KZ0.") === 0) return JSON.parse(decodeURIComponent(escape(atob(code.slice(4)))));
+      if (code.indexOf("{") === 0) return JSON.parse(code);   // 也接受明文 JSON
+      throw new Error("无法识别");
+    }
+    document.getElementById("bkSyncGen").onclick = function () {
+      var code = toSyncCode();
+      document.getElementById("bkSyncBox").value = code;
+      syncMsg("已生成同步码（" + code.length + " 字符）。复制后发微信/短信，在另一台设备粘贴导入即可。", "ok");
+    };
+    document.getElementById("bkSyncCopy").onclick = function () {
+      var box = document.getElementById("bkSyncBox");
+      box.select();
+      var done = false;
+      try { done = document.execCommand("copy"); } catch (e) {}
+      if (!done && navigator.clipboard) {
+        navigator.clipboard.writeText(box.value).then(function () { syncMsg("已复制到剪贴板", "ok"); });
+        return;
+      }
+      syncMsg(done ? "已复制到剪贴板" : "请手动长按复制", done ? "ok" : "");
+    };
+    document.getElementById("bkSyncImport").onclick = function () {
+      var code = document.getElementById("bkSyncBox").value;
+      if (!code.trim()) { syncMsg("先把同步码粘贴到上面的框里", "bad"); return; }
+      var obj;
+      try { obj = fromSyncCode(code); }
+      catch (e) { syncMsg("同步码无效（是否复制完整？）", "bad"); return; }
+      if (!obj || obj.app !== "kaoyan-english-notes" || !obj.data) { syncMsg("同步码无效", "bad"); return; }
+      if (!confirm("将用同步码里的进度覆盖本机全部学习记录，继续？")) return;
+      BK_KEYS.forEach(function (k) { localStorage.removeItem(k); });
+      Object.keys(obj.data).forEach(function (k) {
+        if (BK_KEYS.indexOf(k) >= 0) localStorage.setItem(k, obj.data[k]);
+      });
+      try { localStorage.setItem("kbackup", String(Date.now())); } catch (e) {}
+      alert("导入成功，页面即将刷新");
       location.reload();
     };
     /* 云互通按钮 */
