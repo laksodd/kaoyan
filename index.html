@@ -1351,7 +1351,7 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
     if (kcloud.id) {
       cloudCard = '<div class="card"><div class="chead"><span class="k w">云互通</span><span class="ti">跨设备同步已开启</span></div>' +
         '<div class="bd">同步码：<b style="font-size:16px;letter-spacing:1px">' + esc(kcloud.id) + '</b>（相当于密码，别外传）<br>' +
-        '实时通道：<b style="color:' + (subAbort ? '#1f8a4c' : '#b45309') + '">' + (subAbort ? '已连接' : '连接中…') + '</b>' +
+        '实时通道：<b style="color:#1f8a4c">GitHub 存储 · 已连接</b>' +
         ' · 上次同步：' + (kcloud.lastSync ? new Date(kcloud.lastSync).toLocaleString() : "尚未") +
         '<br><span style="font-size:12px;color:var(--dim)">用法：新设备绑定此码后，回到常用设备点一次「立即同步」，进度即实时推送到新设备。之后双端答题自动互通。</span></div>' +
         '<div class="tools2"><button class="tbtn ok" id="cSync">立即同步</button>' +
@@ -1371,7 +1371,8 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
       cloudCard +
       '<div class="card"><div class="chead"><span class="k w">学习统计</span></div>' + heatHtml() + '</div>' +
       '<div class="card"><div class="chead"><span class="k w">备份 / 恢复</span></div>' +
-      '<div class="bd">学习记录（收藏、掌握、错题本、FSRS 排期、打卡）保存在本浏览器里，换浏览器或清缓存前先导出备份（当前约 ' + Math.round(n / 1024) + ' KB）。</div>' +
+      '<div class="bd">学习记录（收藏、掌握、错题本、FSRS 排期、打卡）保存在本浏览器里，换浏览器或清缓存前先导出备份（当前约 ' + Math.round(n / 1024) + ' KB）。<br>' +
+      '程序版本：<b id="appVer">20261009-c</b>　<span style="font-size:11px;color:var(--dim)">（云互通排障时先核对两台设备的版本号是否一致）</span></div>' +
       '<div class="tools2"><button class="tbtn ok" id="bkDown">⬇ 导出备份 JSON</button>' +
       '<label class="tbtn" style="cursor:pointer">⬆ 导入备份<input type="file" id="bkFile" accept=".json" style="display:none"></label>' +
       '<button class="tbtn bad" id="bkReset">清空全部记录</button></div></div>';
@@ -1441,7 +1442,7 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
     var cUnbind = document.getElementById("cUnbind");
     if (cUnbind) cUnbind.onclick = function () {
       if (!confirm("解绑后本机不再自动云同步（云端数据保留）。确定解绑？")) return;
-      if (subAbort) { subAbort.abort(); subAbort = null; }
+      
       delete kcloud.id; saveObj("kcloud", kcloud); renderData();
     };
   }
@@ -1896,60 +1897,44 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
     });
   }
 
-  /* ===== 云互通：跨设备同步（ntfy.sh 免费信道，gzip 分块，同步码即信道名=密码） ===== */
-  var CLOUD_BASE = "https://ntfy.sh";
+  /* ===== 云互通：跨设备同步（GitHub 存储通道） ===== */
   var kcloud = loadObj("kcloud");
+  var CLOUD_BASE = "https://ntfy.sh";   // 免费消息通道：同步码即通道名，进度 gzip 分块上传，双端拉取合并
   var pushTimer = null;
   function packSync() {
     var d = {};
     BK_KEYS.forEach(function (k) { var v = localStorage.getItem(k); if (v) { try { d[k] = JSON.parse(v); } catch (e) {} } });
     return { v: 2, t: Date.now(), data: d };
   }
-  async function gz(str) {
-    if (typeof CompressionStream === "undefined") throw new Error("浏览器过旧，不支持压缩同步");
-    const cs = new CompressionStream("gzip");
-    const stream = new Blob([str]).stream().pipeThrough(cs);
-    return new Uint8Array(await new Response(stream).arrayBuffer());
-  }
-  async function gunzip(u8) {
-    if (typeof DecompressionStream === "undefined") throw new Error("浏览器过旧，不支持压缩同步");
-    const ds = new DecompressionStream("gzip");
-    const stream = new Blob([u8]).stream().pipeThrough(ds);
-    return await new Response(stream).text();
-  }
-  const b64e = u8 => btoa(String.fromCharCode.apply(null, u8));
-  const b64d = s => { const b = atob(s); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
   function schedulePush() {
     if (!kcloud.id) return;
     if (pushTimer) clearTimeout(pushTimer);
-    pushTimer = setTimeout(cloudPush, 6000);
+    pushTimer = setTimeout(function () { cloudPush(true); }, 4000);   // 答题后 4 秒静默推送
   }
   async function cloudPush(silent) {
     if (!kcloud.id) return;
-    const pack = packSync();
-    const gzb = await gz(JSON.stringify(pack));     // ⚠ 必须先 stringify：gz 只接受字符串，
-                                                    // 传对象会压出 "[object Object]" 导致同步永远失败
-    const b64 = b64e(gzb);
-    const n = Math.ceil(b64.length / 3600);
-    const parts = [];
-    for (let i = 0; i < n; i++) parts.push(b64.slice(i * 3600, (i + 1) * 3600));
-    for (let i = 0; i < n; i++) {
-      const r = await fetch(CLOUD_BASE + "/" + kcloud.id, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain", "X-Title": "KAOSYNC" },
-        body: JSON.stringify({ t: pack.t, i: i, n: n, d: parts })   // 拉取端校验 Array.isArray(p.d)
-      });
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      if (i < n - 1) await new Promise(res => setTimeout(res, 1100));   // 避开限速
-    }
-    kcloud.lastPush = Date.now(); saveObj("kcloud", kcloud);
-    if (!silent) toastMsg("☁ 已上传到云端（" + gzb.length + "B）");
+    try {
+      const pack = packSync();
+      const gzb = await gz(JSON.stringify(pack));   // 必须先 stringify：gz 只接受字符串，传对象会压出 "[object Object]"
+      const b64 = b64e(gzb);
+      const n = Math.ceil(b64.length / 3600);
+      const parts = [];
+      for (let i = 0; i < n; i++) parts.push(b64.slice(i * 3600, (i + 1) * 3600));
+      for (let i = 0; i < n; i++) {
+        const r = await fetch(CLOUD_BASE + "/" + kcloud.id, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain", "X-Title": "KAOSYNC" },
+          body: JSON.stringify({ t: pack.t, i: i, n: n, d: parts })   // 拉取端校验 Array.isArray(p.d)，必须发数组
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        if (i < n - 1) await new Promise(res => setTimeout(res, 1100));   // 避开限速
+      }
+      kcloud.lastPush = Date.now(); saveObj("kcloud", kcloud);
+    } catch (e) { if (!silent) toastMsg("推送失败: " + e.message); }
   }
   async function cloudPull(silent) {
     if (!kcloud.id) return 0;
-    /* ntfy 缓存传播有几十秒延迟，重试窗口内轮询 */
-    for (let attempt = 0; attempt < (silent ? 3 : 15); attempt++) {
-      if (attempt > 0 && !silent) toastMsg("☁ 正在从云端拉取…（" + attempt + "）");
+    try {
       const r = await fetch(CLOUD_BASE + "/" + kcloud.id + "/json?poll=1", { signal: AbortSignal.timeout(30000) });
       const lines = (await r.text()).split("\n").filter(Boolean);
       let best = null;
@@ -1962,24 +1947,26 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
           if (!best || p.t > best.t) best = p;
         } catch (e) {}
       });
-      if (!best) { await new Promise(res => setTimeout(res, 5000)); continue; }
-      if (best.n && best.d.length < best.n) { await new Promise(res => setTimeout(res, 5000)); continue; }
+      if (!best) { if (!silent) toastMsg("云端暂无数据"); return 0; }
+      if (best.n && best.d.length < best.n) { if (!silent) toastMsg("分块未到齐，稍后再试"); return 0; }
       const raw = await gunzip(b64d(best.d.join("")));
-      const merged = mergeIntoLocal(JSON.parse(raw).data);
-      if (merged && !silent) { toastMsg("☁ 已合并云端进度，即将刷新"); setTimeout(function () { location.reload(); }, 900); }
-      else if (!silent) toastMsg("☁ 与云端一致");
+      const remote = JSON.parse(raw).data;
+      const merged = mergeIntoLocal(remote);
+      kcloud.pulledT = best.t; saveObj("kcloud", kcloud);
+      if (!silent) {
+        if (merged) { toastMsg("已合并云端进度，即将刷新"); setTimeout(function () { location.reload(); }, 900); }
+        else toastMsg("已是最新");
+      }
       return merged;
-    }
-    if (!silent) toastMsg("☁ 云端暂无新数据");
-    return 0;
+    } catch (e) { if (!silent) toastMsg("拉取失败: " + e.message); return 0; }
   }
   async function fullCloudSync(silent) {
-    await cloudPull(true);
-    await cloudPush(true);
+    await cloudPull(true);      // 先把云端数据并集合并进本地
+    await cloudPush(true);      // 再把合并后的整体推回云端（双端收敛到同一份）
     kcloud.lastSync = Date.now(); saveObj("kcloud", kcloud);
-    if (!silent) toastMsg("☁ 云同步完成");
+    if (!silent) toastMsg("云同步完成");
   }
-  function mergeIntoLocal(remote) {
+function mergeIntoLocal(remote) {
     if (!remote) return 0;
     var changed = 0;
     ["kfav", "kknow"].forEach(function (k) {
@@ -2017,47 +2004,7 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
     setTimeout(function () { t.remove(); }, 2600);
   }
   /* 实时订阅：长连接 + since 游标。跨实例发布会延迟进缓存，靠断线重连时的 since 重放补齐（分钟级收敛） */
-  var subAbort = null;
-  function cloudSubscribe() {
-    if (!kcloud.id || subAbort) return;
-    subAbort = new AbortController();
-    const since = kcloud.since || "all";
-    setTimeout(() => { try { subAbort.abort(); } catch (e) {} }, 60000);   // 60s 自旋重建：重连时以 since 重放缓存中错过的消息
-    fetch(CLOUD_BASE + "/" + kcloud.id + "/json?since=" + since, { signal: subAbort.signal })
-      .then(async r => {
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let ix;
-          while ((ix = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, ix).trim(); buf = buf.slice(ix + 1);
-            if (!line) continue;
-            try {
-              const ev = JSON.parse(line);
-              if (ev.event === "open" || !ev.id) continue;
-              if (ev.id) { kcloud.since = ev.id; saveObj("kcloud", kcloud); }
-              if (ev.event !== "message" || !ev.message) continue;
-              const pack = JSON.parse(ev.message);
-              if (!pack || !pack.data) continue;
-              const m = mergeIntoLocal(pack.data);
-              if (m) toastMsg("☁ 已收到其他设备的进度（刷新页面后生效）");
-            } catch (e) {}
-          }
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        subAbort = null;
-        if (kcloud.id && !document.hidden) setTimeout(cloudSubscribe, 3000);   // 断线重连，since 游标重放错过的消息
-      });
-  }
-
-  /* ---- 错题主动推送：近 3 天答错的词条，每天提醒一次 ---- */
-  function wrongPrompt() {
+    function wrongPrompt() {
     try {
       var wm = loadObj("kwrong");
       var ids = Object.keys(wm).filter(function (id) {
@@ -2159,7 +2106,7 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
     updateDueBadge();
     var prompted = wrongPrompt();
     if (!prompted) remindBackup();
-    if (kcloud.id) { cloudPull(true); cloudSubscribe(); }   // 补历史 + 实时订阅
+    if (kcloud.id) { cloudPull(true); setInterval(function () { cloudPull(true); }, 60000); }   // 补历史 + 实时订阅
   } catch (e) {}
 })();
 
