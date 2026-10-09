@@ -1359,7 +1359,10 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
         '<button class="tbtn bad" id="cUnbind">解绑</button></div></div>';
     } else {
       cloudCard = '<div class="card"><div class="chead"><span class="k w">云互通</span><span class="ti">跨设备同步</span></div>' +
-        '<div class="bd">生成一个同步码，在手机和电脑上绑定同一个码，学习进度就自动互通（答题实时上云，打开自动合并）。<br><b>建议流程：电脑生成码 → 手机绑定 → 回电脑点「立即同步」→ 进度实时到达手机。</b></div>' +
+        '<div class="bd">在手机和电脑上绑定<b>同一个码</b>，学习进度就自动互通（答题实时上云，打开自动合并）。<br>' +
+        '<b>⚠ 最常见错误：每台设备都点「生成同步码」——两个码是两条通道，永远不通！</b><br>' +
+        '正确做法：只在常用设备点一次「生成同步码」；其他设备把那个码粘贴进来点「绑定」。<br>' +
+        '绑定后：回到有进度的设备点一次「立即同步」，进度就会推到新设备（约几秒到 1 分钟）。</div>' +
         '<div class="tools2"><button class="tbtn ok" id="cGen">生成同步码</button>' +
         '<input type="text" id="cCode" placeholder="粘贴已有同步码" style="flex:1;min-width:140px;padding:8px;border:1px solid var(--line);border-radius:0;font-size:13px">' +
         '<button class="tbtn" id="cBind">绑定</button></div></div>';
@@ -1408,6 +1411,10 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
     /* 云互通按钮 */
     var cGen = document.getElementById("cGen");
     if (cGen) cGen.onclick = function () {
+      if (!confirm("注意：一个同步码对应一条独立通道。\n\n如果另一台设备已经生成过码（页面显示过类似 ky 开头的码），请【不要生成新的】，" +
+        "而是把那边的码粘贴到输入框点「绑定」——两边用同一个码才会互通。\n\n确认本机是第一台设备，要生成新码吗？")) {
+        return;
+      }
       cGen.disabled = true; cGen.textContent = "生成中…";
       var code = "ky" + Math.random().toString(36).slice(2, 12);
       kcloud.id = code; saveObj("kcloud", kcloud);
